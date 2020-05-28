@@ -1,3 +1,9 @@
+/**
+* Infinite Memory Engine - POSIX to IME native wrapper
+*
+* Copyright (c) 2020, DataDirect Networks.
+******************************************************************************/
+
 #define _GNU_SOURCE
 #include <stdlib.h>
 #include <dlfcn.h>

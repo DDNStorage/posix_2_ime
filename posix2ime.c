@@ -9,17 +9,20 @@
 #include <dlfcn.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
 #include <dirent.h>
+#include <fcntl.h>
+#include <errno.h>
 #include "ime_native.h"
 
 #define BFS_PATH_ENV "IM_CLIENT_BFS_PATH"
 
 static ssize_t (*real_read)(int fd, void *buf, size_t count) = NULL;
 static ssize_t (*real_write)(int fd, const void *buf, size_t count) = NULL;
-static int     (*real_open)(const char *pathname, int flags, mode_t mode) = NULL;
+static int     (*real_open)(const char *pathname, int flags, ...) = NULL;
 static int     (*real___open_2)(const char *pathname, int flags) = NULL;
 static int     (*real_close)(int fd) = NULL;
 static int     (*real_access)(const char *pathname, int mode) = NULL;
@@ -103,8 +106,6 @@ int rmdir(const char *pathname)
 
 int mkdir(const char *pathname, mode_t mode)
 {
-    char tmp[PATH_MAX];
-
     if (!is_init)
     {
         real_mkdir = dlsym(RTLD_NEXT, "mkdir");
@@ -180,26 +181,76 @@ off64_t lseek(int fd, off64_t offset, int whence)
         return ime_native_lseek(fd, offset, whence);
 }
 
-int open(const char *pathname, int flags, mode_t mode)
+int open(const char *pathname, int flags, ...)
 {
+    char tmp[PATH_MAX];
+    int mode = 0;
+    va_list l;
+
+    if (flags & O_CREAT) {
+        va_start(l, flags);
+        mode = va_arg(l, int);
+        va_end(l);
+    }
+
     if (!is_init)
     {
         real_open = dlsym(RTLD_NEXT, "open");
         return real_open(pathname, flags, mode);
     }
     else
-        return ime_native_open(pathname, flags, mode);
+    {
+
+        if ((flags & O_CREAT) &&
+            enable_client_bfs &&
+            !(flags & O_DIRECTORY) &&
+            ime_client_native2_is_fuse_path_and_convert(pathname, tmp))
+        {
+            char bfs_path[PATH_MAX];
+            strcpy(bfs_path, client_bfs_path);
+            strcat(bfs_path, tmp);
+
+            int ret = syscall(SYS_mknod, bfs_path, S_IFREG | mode, 0);
+            if (ret < 0 && errno != EEXIST)
+                return ret;
+            else
+                return ime_native_open(pathname, flags & ~O_CREAT, 0);
+        }
+        else
+            return ime_native_open(pathname, flags, mode);
+    }
 }
 
 int __open_2(const char *pathname, int flags)
 {
+    char tmp[PATH_MAX];
+
     if (!is_init)
     {
         real___open_2 = dlsym(RTLD_NEXT, "__open_2");
         return real___open_2(pathname, flags);
     }
     else
-        return ime_native_open(pathname, flags, 0);
+    {
+
+        if (flags & O_CREAT &&
+            enable_client_bfs &&
+            !(flags & O_DIRECTORY) &&
+            ime_client_native2_is_fuse_path_and_convert(pathname, tmp))
+        {
+            char bfs_path[PATH_MAX];
+            strcpy(bfs_path, client_bfs_path);
+            strcat(bfs_path, tmp);
+
+            int ret = syscall(SYS_mknod, bfs_path, S_IFREG, 0);
+            if (ret < 0 && errno != EEXIST)
+                return ret;
+            else
+                return ime_native_open(pathname, flags & ~O_CREAT, 0);
+        }
+        else
+            return ime_native_open(pathname, flags, 0);
+    }
 }
 
 int close(int fd)

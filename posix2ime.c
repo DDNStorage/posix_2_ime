@@ -33,6 +33,8 @@ static DIR*    (*real_opendir)(const char *name) = NULL;
 static int     (*real_mkdir)(const char *pathname, mode_t mode) = NULL;
 static int     (*real_rmdir)(const char *pathname) = NULL;
 static int     (*real_mknod)(const char *pathname, mode_t mode, dev_t dev) = NULL;
+static int     (*real_execve)(const char *filename, char *const argv[],
+                    char *const envp[]) = NULL;
 static int     (*real_libc_start_main)(int (*main) (int,char **,char **),
                     int argc, char **ubp_av,
                     void (*init) (void),
@@ -56,6 +58,7 @@ static void init_real(void)
     real_lstat           = dlsym(RTLD_NEXT, "lstat");
     real_fsync           = dlsym(RTLD_NEXT, "fsync");
     real_access          = dlsym(RTLD_NEXT, "access");
+    real_execve          = dlsym(RTLD_NEXT, "execve");
     real_lseek           = dlsym(RTLD_NEXT, "lseek");
     real_open            = dlsym(RTLD_NEXT, "open");
     real___open_2        = dlsym(RTLD_NEXT, "__open_2");
@@ -251,6 +254,15 @@ DIR *opendir(const char *name)
     }
     else
         return real_opendir(name);
+}
+
+int execve(const char *filename, char *const argv[], char *const envp[])
+{
+    if (!is_init)
+        real_execve = dlsym(RTLD_NEXT, "execve");
+
+    /* Avoid propagating LD_PRELOAD env variable */
+    return real_execve(filename, argv, NULL);
 }
 
 int __libc_start_main(int (*main) (int,char **,char **),

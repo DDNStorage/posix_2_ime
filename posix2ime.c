@@ -71,9 +71,16 @@ static void init_real(void)
     real_libc_start_main = dlsym(RTLD_NEXT, "__libc_start_main");
 }
 
-int unlink(const char *pathname)
+int __attribute__((optimize("O0"))) unlink(const char *pathname)
 {
-    if (!is_init || pathname == NULL)
+    /* Needs optimize("O0") attribute otherwise this condition is dropped */
+    if (pathname == NULL)
+    {
+        errno = ENOENT;
+        return -1;
+    }
+
+    if (!is_init)
     {
         real_unlink = dlsym(RTLD_NEXT, "unlink");
         return real_unlink(pathname);
@@ -95,7 +102,7 @@ int mknod(const char *pathname, mode_t mode, dev_t dev)
 
 int rmdir(const char *pathname)
 {
-    if (!is_init || pathname == NULL)
+    if (!is_init)
     {
         real_rmdir = dlsym(RTLD_NEXT, "rmdir");
         return real_rmdir(pathname);

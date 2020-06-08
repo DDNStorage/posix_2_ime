@@ -18,7 +18,14 @@
 #include <errno.h>
 #include "ime_native.h"
 
-#define BFS_PATH_ENV "IM_CLIENT_BFS_PATH"
+/* OPTIONAL: Defines IME root path to the Backing File System on the compute nodes */
+#define BFS_PATH_ENV        "IM_CLIENT_BFS_PATH"
+
+/* OPTIONAL: Disables open O_CREAT conversion to mknod + native open */
+#define NO_MKNOD_CREATE_ENV "IM_CLIENT_NO_MKNOD_CREATE"
+
+/* OPTIONAL: Disables opendir redirection to the Backing File System */
+#define NO_BFS_OPENDIR_ENV  "IM_CLIENT_NO_BFS_OPENDIR"
 
 static ssize_t (*real_read)(int fd, void *buf, size_t count) = NULL;
 static ssize_t (*real_write)(int fd, const void *buf, size_t count) = NULL;
@@ -48,6 +55,8 @@ static int     (*real_libc_start_main)(int (*main) (int,char **,char **),
 static bool is_init = false;
 static char client_bfs_path[PATH_MAX] = {0};
 static bool enable_client_bfs = false;
+static bool enable_mknod_create = false;
+static bool enable_bfs_opendir = false;
 
 static void init_real(void)
 {
@@ -209,7 +218,7 @@ int open(const char *pathname, int flags, ...)
     {
 
         if ((flags & O_CREAT) &&
-            enable_client_bfs &&
+            enable_mknod_create &&
             !(flags & O_DIRECTORY) &&
             ime_client_native2_is_fuse_path_and_convert(pathname, tmp))
         {
@@ -241,7 +250,7 @@ int __open_2(const char *pathname, int flags)
     {
 
         if (flags & O_CREAT &&
-            enable_client_bfs &&
+            enable_mknod_create &&
             !(flags & O_DIRECTORY) &&
             ime_client_native2_is_fuse_path_and_convert(pathname, tmp))
         {
@@ -302,7 +311,7 @@ DIR *opendir(const char *name)
         real_opendir = dlsym(RTLD_NEXT, "opendir");
         return real_opendir(name);
     }
-    else if (enable_client_bfs &&
+    else if (enable_bfs_opendir &&
              ime_client_native2_is_fuse_path_and_convert(name, tmp))
     {
         char bfs_path[PATH_MAX];
@@ -330,14 +339,28 @@ int __libc_start_main(int (*main) (int,char **,char **),
               void (*rtld_fini)(void),
               void (*stack_end))
 {
-    printf("POSIX 2 IME Library Loaded\n");
-
+    /* Check if some operations should be redirected to the Backing File System */
     char *env_tmp = getenv(BFS_PATH_ENV);
     if (env_tmp != NULL)
     {
         strcpy(client_bfs_path, env_tmp);
         enable_client_bfs = true;
     }
+
+    /* Check if opendir should be redirected to the BFS */
+    env_tmp = getenv(NO_BFS_OPENDIR_ENV);
+    if (enable_client_bfs && (env_tmp == NULL))
+        enable_bfs_opendir = true;
+
+    /* Check if open O_CREAT should be converted into mknod in the Backing File
+     * System followed by an IME native open (without O_CREAT flag). */
+    env_tmp = getenv(NO_MKNOD_CREATE_ENV);
+    if (enable_client_bfs && (env_tmp == NULL))
+        enable_mknod_create = true;
+
+    printf("POSIX 2 IME Library Loaded (opendir to BFS: %s, mknod create: %s)\n",
+           enable_bfs_opendir ? "enabled" : "disabled",
+           enable_mknod_create ? "enabled" : "disabled");
 
     init_real();
 

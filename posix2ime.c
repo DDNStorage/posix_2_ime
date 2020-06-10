@@ -18,6 +18,10 @@
 #include <errno.h>
 #include "ime_native.h"
 
+#if defined _LIBC || defined _IO_MTSAFE_IO
+#include <pthread.h>
+#endif
+
 /* OPTIONAL: Defines IME root path to the Backing File System on the compute nodes */
 #define BFS_PATH_ENV        "IM_CLIENT_BFS_PATH"
 
@@ -26,6 +30,34 @@
 
 /* OPTIONAL: Disables opendir redirection to the Backing File System */
 #define NO_BFS_OPENDIR_ENV  "IM_CLIENT_NO_BFS_OPENDIR"
+
+/* OPTIONAL: Disables large buffer for opendir */
+#define NO_LARGE_DIR_ENV    "IM_CLIENT_NO_LARGE_DIR_BUFFER"
+
+#define OPENDIR_BUFFER_SZ   1052672
+
+
+typedef struct __dirstream
+{
+    int fd;                     /* File descriptor.  */
+#if defined _LIBC || defined _IO_MTSAFE_IO
+    pthread_mutex_t lock;
+#else
+    int lock;
+#endif
+    size_t allocation;          /* Space allocated for the block.  */
+    size_t size;                /* Total valid data in the block.  */
+    size_t offset;              /* Current offset into the block.  */
+    off_t filepos;              /* Position of next entry to read.  */
+    int errcode;                /* Delayed error code.  */
+    /* Directory block.  We must make sure that this block starts
+       at an address that is aligned adequately enough to store
+       dirent entries.  Using the alignment of "void *" is not
+       sufficient because dirents on 32-bit platforms can require
+       64-bit alignment.  We use "long double" here to be consistent
+       with what malloc uses.  */
+    char data[0] __attribute__ ((aligned (__alignof__ (long double))));
+} DIR;
 
 static ssize_t (*real_read)(int fd, void *buf, size_t count) = NULL;
 static ssize_t (*real_write)(int fd, const void *buf, size_t count) = NULL;
@@ -57,6 +89,7 @@ static char client_bfs_path[PATH_MAX] = {0};
 static bool enable_client_bfs = false;
 static bool enable_mknod_create = false;
 static bool enable_bfs_opendir = false;
+static bool enable_large_dir_buffer = false;
 
 static void init_real(void)
 {
@@ -315,9 +348,25 @@ DIR *opendir(const char *name)
              ime_client_native2_is_fuse_path_and_convert(name, tmp))
     {
         char bfs_path[PATH_MAX];
+        DIR *d;
         strcpy(bfs_path, client_bfs_path);
         strcat(bfs_path, tmp);
-        return real_opendir(bfs_path);
+        d = real_opendir(bfs_path);
+
+        /* Extend size of DIR buffer to improve readdir efficiency */
+        if (d != NULL && enable_large_dir_buffer)
+        {
+            DIR *new_d = calloc(1, sizeof(DIR) + OPENDIR_BUFFER_SZ);
+            if (new_d != NULL)
+            {
+                memcpy(new_d, d, sizeof(DIR));
+                new_d->allocation = OPENDIR_BUFFER_SZ;
+                free(d);
+                d = new_d;
+            }
+        }
+
+        return d;
     }
     else
         return real_opendir(name);
@@ -352,15 +401,22 @@ int __libc_start_main(int (*main) (int,char **,char **),
     if (enable_client_bfs && (env_tmp == NULL))
         enable_bfs_opendir = true;
 
+    /* Check if opendir should allocate larger buffer */
+    env_tmp = getenv(NO_LARGE_DIR_ENV);
+    if (enable_bfs_opendir && (env_tmp == NULL))
+        enable_large_dir_buffer = true;
+
     /* Check if open O_CREAT should be converted into mknod in the Backing File
      * System followed by an IME native open (without O_CREAT flag). */
     env_tmp = getenv(NO_MKNOD_CREATE_ENV);
     if (enable_client_bfs && (env_tmp == NULL))
         enable_mknod_create = true;
 
-    printf("POSIX 2 IME Library Loaded (opendir to BFS: %s, mknod create: %s)\n",
-           enable_bfs_opendir ? "enabled" : "disabled",
-           enable_mknod_create ? "enabled" : "disabled");
+    printf("POSIX 2 IME Library Loaded (opendir to BFS: %s, "
+           "large dir buffer: %s, mknod create: %s)\n",
+           enable_bfs_opendir      ? "on" : "off",
+           enable_large_dir_buffer ? "on" : "off",
+           enable_mknod_create     ? "on" : "off");
 
     init_real();
 

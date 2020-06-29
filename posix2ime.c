@@ -22,6 +22,10 @@
 #include <pthread.h>
 #endif
 
+/* IME environment variable to enable/disable min connections mode: a client
+ * process connects to only one network interface per IME server node) */
+#define MIN_CONNECTIONS_ENV "IM_CLIENT_MIN_CONNECTIONS"
+
 /* OPTIONAL: Defines IME root path to the Backing File System on the compute nodes */
 #define BFS_PATH_ENV        "IM_CLIENT_BFS_PATH"
 
@@ -381,6 +385,15 @@ int execve(const char *filename, char *const argv[], char *const envp[])
     return real_execve(filename, argv, NULL);
 }
 
+static void ime_env_init(void)
+{
+    /* Disable IME min connections if no env. variable set */
+    int ret = setenv(MIN_CONNECTIONS_ENV , "0", 0);
+    if (ret != 0)
+        fprintf(stderr, "Unable to disable IME min connections: %s\n",
+                strerror(errno));
+}
+
 int __libc_start_main(int (*main) (int,char **,char **),
               int argc,char **ubp_av,
               void (*init) (void),
@@ -420,6 +433,7 @@ int __libc_start_main(int (*main) (int,char **,char **),
 
     init_real();
 
+    ime_env_init();
     ime_native_init();
 
     is_init = true;

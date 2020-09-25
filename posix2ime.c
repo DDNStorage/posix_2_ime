@@ -71,8 +71,8 @@ static int     (*real_close)(int fd) = NULL;
 static int     (*real_access)(const char *pathname, int mode) = NULL;
 static int     (*real_fsync)(int fd) = NULL;
 static int     (*real_unlink)(const char *pathname) = NULL;
-static int     (*real_stat)(const char *pathname, struct stat *statbuf) = NULL;
-static int     (*real_lstat)(const char *pathname, struct stat *statbuf) = NULL;
+static int     (*real_stat)(int __ver, const char *pathname,
+                    struct stat *statbuf) = NULL;
 static off64_t (*real_lseek)(int fd, off64_t offset, int whence) = NULL;
 static int     (*real_statvfs)(const char *path, struct statvfs *buf) = NULL;
 static DIR*    (*real_opendir)(const char *name) = NULL;
@@ -103,8 +103,7 @@ static void init_real(void)
     real_rmdir           = dlsym(RTLD_NEXT, "rmdir");
     real_statvfs         = dlsym(RTLD_NEXT, "statvfs");
     real_unlink          = dlsym(RTLD_NEXT, "unlink");
-    real_stat            = dlsym(RTLD_NEXT, "stat");
-    real_lstat           = dlsym(RTLD_NEXT, "lstat");
+    real_stat            = dlsym(RTLD_NEXT, "__xstat");
     real_fsync           = dlsym(RTLD_NEXT, "fsync");
     real_access          = dlsym(RTLD_NEXT, "access");
     real_execve          = dlsym(RTLD_NEXT, "execve");
@@ -179,23 +178,12 @@ int statvfs(const char *path, struct statvfs *buf)
         return ime_native_statvfs(path, buf);
 }
 
-int stat(const char *pathname, struct stat *statbuf)
+int __xstat(int __ver, const char *pathname, struct stat *statbuf)
 {
     if (!is_init)
     {
-        real_stat = dlsym(RTLD_NEXT, "stat");
-        return real_stat(pathname, statbuf);
-    }
-    else
-        return ime_native_stat(pathname, statbuf);
-}
-
-int lstat(const char *pathname, struct stat *statbuf)
-{
-    if (!is_init)
-    {
-        real_lstat = dlsym(RTLD_NEXT, "lstat");
-        return real_lstat(pathname, statbuf);
+        real_stat = dlsym(RTLD_NEXT, "__xstat");
+        return real_stat(__ver, pathname, statbuf);
     }
     else
         return ime_native_stat(pathname, statbuf);
